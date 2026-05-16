@@ -900,128 +900,51 @@ struct DriftServerCommand: ParsableCommand {
     )
 }
 
-struct Serve: ParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Run the HTTP build server.")
+func runServer(
+    host: String,
+    port: Int,
+    dataDir: String?,
+    name: String?,
+    publicURL: String?,
+    concurrency: Int,
+    autoApprovePairing: Bool
+) throws {
+    var environment = try Environment.detect()
+    let app = Application(environment)
+    defer { app.shutdown() }
 
-    @Option(help: "HTTP bind host.")
-    var host: String = "0.0.0.0"
+    let serverName = name ?? Host.current().localizedName ?? "drift-server"
+    let advertisedHost = host == "0.0.0.0" ? (Host.current().localizedName ?? "localhost") : host
+    let advertisedURL = normalizeURL(publicURL ?? "http://\(advertisedHost):\(port)")
+    let root = dataDir.map(expandPath) ?? DriftPaths.defaultServerRoot
+    let store = try ServerStateStore(root: root, serverName: serverName, serverURL: advertisedURL)
+    let worker = BuildWorker(store: store)
+    let queue = BuildQueue(maxConcurrent: concurrency, store: store, worker: worker)
+    let serverInfo = ServerInfo(
+        id: RepoHasher.shortHash(advertisedURL),
+        name: serverName,
+        host: advertisedHost,
+        port: port,
+        url: advertisedURL,
+        version: DriftVersion.current,
+        xcode: xcodeVersion(),
+        maxJobs: max(1, concurrency)
+    )
 
-    @Option(help: "HTTP bind port.")
-    var port: Int = 8000
+    app.http.server.configuration.hostname = host
+    app.http.server.configuration.port = port
+    try configureRoutes(app: app, store: store, queue: queue, serverInfo: serverInfo, autoApprovePairing: autoApprovePairing)
 
-    @Option(help: "Persistent data directory.")
-    var dataDir: String?
+    let bonjour = BonjourPublisher(info: serverInfo)
+    let udp = UDPDiscoveryResponder(info: serverInfo)
+    bonjour.start()
+    udp.start()
 
-    @Option(help: "Server display name.")
-    var name: String?
-
-    @Option(help: "Public URL advertised to clients.")
-    var publicURL: String?
-
-    @Option(help: "Maximum concurrent builds.")
-    var concurrency: Int = 1
-
-    @Flag(help: "Automatically approve pairing requests. Intended only for local demos.")
-    var autoApprovePairing = false
-
-    func run() throws {
-        var environment = try Environment.detect()
-        let app = Application(environment)
-        defer { app.shutdown() }
-
-        let serverName = name ?? Host.current().localizedName ?? "drift-server"
-        let advertisedHost = host == "0.0.0.0" ? (Host.current().localizedName ?? "localhost") : host
-        let advertisedURL = normalizeURL(publicURL ?? "http://\(advertisedHost):\(port)")
-        let root = dataDir.map(expandPath) ?? DriftPaths.defaultServerRoot
-        let store = try ServerStateStore(root: root, serverName: serverName, serverURL: advertisedURL)
-        let worker = BuildWorker(store: store)
-        let queue = BuildQueue(maxConcurrent: concurrency, store: store, worker: worker)
-        let serverInfo = ServerInfo(
-            id: RepoHasher.shortHash(advertisedURL),
-            name: serverName,
-            host: advertisedHost,
-            port: port,
-            url: advertisedURL,
-            version: DriftVersion.current,
-            xcode: xcodeVersion(),
-            maxJobs: max(1, concurrency)
-        )
-
-        app.http.server.configuration.hostname = host
-        app.http.server.configuration.port = port
-        try configureRoutes(app: app, store: store, queue: queue, serverInfo: serverInfo, autoApprovePairing: autoApprovePairing)
-
-        let bonjour = BonjourPublisher(info: serverInfo)
-        let udp = UDPDiscoveryResponder(info: serverInfo)
-        bonjour.start()
-        udp.start()
-
-        print("drift-server \(DriftVersion.current) listening on \(host):\(port)")
-        print("data: \(root.path)")
-        try app.run()
-        _ = bonjour
-        _ = udp
-    }
-}
-
-struct Approve: ParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Approve a pending pairing code.")
-
-    @Option(help: "Pairing code or pairing id.")
-    var code: String
-
-    @Option(help: "Persistent data directory.")
-    var dataDir: String?
-
-    func run() throws {
-        let store = try ServerStateStore(root: dataDir.map(expandPath) ?? DriftPaths.defaultServerRoot, serverName: "drift-server", serverURL: "")
-        let token = try store.approve(code: code)
-        print("Approved \(token.clientName) as \(token.id).")
-    }
-}
-
-struct Clients: ParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "List paired clients.")
-
-    @Option(help: "Persistent data directory.")
-    var dataDir: String?
-
-    func run() throws {
-        let store = try ServerStateStore(root: dataDir.map(expandPath) ?? DriftPaths.defaultServerRoot, serverName: "drift-server", serverURL: "")
-        let tokens = try store.tokens()
-        if tokens.isEmpty {
-            print("No clients.")
-            return
-        }
-        for token in tokens {
-            let status = token.revokedAt == nil ? "active" : "revoked"
-            print("\(token.id) \(token.clientName) \(status) hash=\(token.tokenHash.prefix(12))")
-        }
-    }
-}
-
-struct Revoke: ParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Revoke a paired client.")
-
-    @Option(help: "Client id or client name.")
-    var clientId: String
-
-    @Option(help: "Persistent data directory.")
-    var dataDir: String?
-
-    func run() throws {
-        let store = try ServerStateStore(root: dataDir.map(expandPath) ?? DriftPaths.defaultServerRoot, serverName: "drift-server", serverURL: "")
-        let token = try store.revoke(clientId: clientId)
-        print("Revoked \(token.clientName) (\(token.id)).")
-    }
-}
-
-struct Version: ParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Print server version.")
-
-    func run() {
-        print(DriftVersion.current)
-    }
+    print("drift-server \(DriftVersion.current) listening on \(host):\(port)")
+    print("data: \(root.path)")
+    try app.run()
+    _ = bonjour
+    _ = udp
 }
 
 func findExecutable(_ name: String) -> String? {
