@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Test
+        run: swift test
+
+      - name: Build arm64 release binaries
+        run: swift build -c release --arch arm64
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          mkdir -p dist/driftbuild-macos-arm64
+          cp .build/arm64-apple-macosx/release/drift dist/driftbuild-macos-arm64/
+          cp .build/arm64-apple-macosx/release/drift-server dist/driftbuild-macos-arm64/
+          cp README.md LICENSE dist/driftbuild-macos-arm64/
+          tar -C dist -czf dist/driftbuild-macos-arm64.tar.gz driftbuild-macos-arm64
+          shasum -a 256 dist/driftbuild-macos-arm64.tar.gz > dist/driftbuild-macos-arm64.tar.gz.sha256
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/driftbuild-macos-arm64.tar.gz
+            dist/driftbuild-macos-arm64.tar.gz.sha256
