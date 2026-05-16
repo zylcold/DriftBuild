@@ -889,17 +889,6 @@ final class UDPDiscoveryResponder {
     }
 }
 
-@main
-struct DriftServerCommand: ParsableCommand {
-    static let configuration = CommandConfiguration(
-        commandName: "drift-server",
-        abstract: "LAN remote iOS build server.",
-        version: DriftVersion.current,
-        subcommands: [Serve.self, Approve.self, Clients.self, Revoke.self, Version.self],
-        defaultSubcommand: Serve.self
-    )
-}
-
 func runServer(
     host: String,
     port: Int,
@@ -1001,3 +990,5 @@ func xcodeVersion() -> String {
         return "xcodebuild not available"
     }
 }
+
+DriftServerCommand.main()

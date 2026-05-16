@@ -2,6 +2,16 @@ import ArgumentParser
 import DriftCore
 import Foundation
 
+struct DriftServerCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "drift-server",
+        abstract: "LAN remote iOS build server.",
+        version: DriftVersion.current,
+        subcommands: [Serve.self, Approve.self, Clients.self, Revoke.self, Version.self],
+        defaultSubcommand: Serve.self
+    )
+}
+
 struct Serve: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Run the HTTP build server.")
 
