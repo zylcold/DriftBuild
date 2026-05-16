@@ -1,8 +1,8 @@
-import ArgumentParser
 import DriftCore
 import Foundation
-import Vapor
 import Darwin
+import ArgumentParser
+import Vapor
 
 extension ServerInfo: Content {}
 extension PairingRequest: Content {}
