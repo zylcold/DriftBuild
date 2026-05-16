@@ -78,6 +78,7 @@ public struct BuildRequest: Codable, Hashable, Sendable {
     public var project: String?
     public var scheme: String
     public var configuration: String
+    public var agent: BuildAgent?
     public var includeXcresult: Bool
     public var timeoutSeconds: Int
 
@@ -89,6 +90,7 @@ public struct BuildRequest: Codable, Hashable, Sendable {
         project: String?,
         scheme: String,
         configuration: String = "Debug",
+        agent: BuildAgent? = nil,
         includeXcresult: Bool = false,
         timeoutSeconds: Int = 3600
     ) {
@@ -99,9 +101,16 @@ public struct BuildRequest: Codable, Hashable, Sendable {
         self.project = project
         self.scheme = scheme
         self.configuration = configuration
+        self.agent = agent
         self.includeXcresult = includeXcresult
         self.timeoutSeconds = timeoutSeconds
     }
+}
+
+public enum BuildAgent: String, Codable, CaseIterable, Hashable, Sendable {
+    case codex
+    case claude
+    case opencode
 }
 
 public enum JobStatus: String, Codable, Sendable {

@@ -295,6 +295,61 @@ struct CommandResult {
     var canceled: Bool
 }
 
+struct AgentBuildCommand {
+    var executable: String
+    var arguments: [String]
+    var loggedArguments: [String]
+
+    static func make(agent: BuildAgent, source: URL, output: URL, request: BuildRequest) -> AgentBuildCommand {
+        let prompt = makePrompt(source: source, output: output, request: request)
+        switch agent {
+        case .codex:
+            return AgentBuildCommand(
+                executable: "codex",
+                arguments: ["exec", "--sandbox", "workspace-write", "--color", "never", prompt],
+                loggedArguments: ["exec", "--sandbox", "workspace-write", "--color", "never", "<driftbuild-agent-prompt>"]
+            )
+        case .claude:
+            return AgentBuildCommand(
+                executable: "claude",
+                arguments: ["-p", "--permission-mode", "bypassPermissions", prompt],
+                loggedArguments: ["-p", "--permission-mode", "bypassPermissions", "<driftbuild-agent-prompt>"]
+            )
+        case .opencode:
+            return AgentBuildCommand(
+                executable: "opencode",
+                arguments: ["run", prompt],
+                loggedArguments: ["run", "<driftbuild-agent-prompt>"]
+            )
+        }
+    }
+
+    private static func makePrompt(source: URL, output: URL, request: BuildRequest) -> String {
+        var lines = [
+            "You are running inside a DriftBuild job on a macOS build machine.",
+            "Build the checked-out iOS repository at \(source.path).",
+            "Use the existing project files and produce an iOS Simulator build.",
+            "Scheme: \(request.scheme)",
+            "Configuration: \(request.configuration)",
+            "Use CODE_SIGNING_ALLOWED=NO and do not archive or export an IPA.",
+            "Install repository dependencies when needed, including CocoaPods if a Podfile exists.",
+            "Write all useful progress and errors to stdout/stderr so DriftBuild can stream logs.",
+            "Do not ask for interactive confirmation."
+        ]
+        if let workspace = request.workspace, !workspace.isEmpty {
+            lines.append("Preferred workspace: \(workspace)")
+        }
+        if let project = request.project, !project.isEmpty {
+            lines.append("Preferred project: \(project)")
+        }
+        if request.includeXcresult {
+            lines.append("If you invoke xcodebuild, write the result bundle to \(output.appendingPathComponent("Build.xcresult", isDirectory: true).path).")
+        }
+        lines.append("Finish with a non-zero exit code if the build cannot be completed.")
+        return lines.joined(separator: "\n")
+    }
+}
+
 final class ProcessRunner {
     func run(
         executable: String,
@@ -398,29 +453,21 @@ final class BuildWorker {
             }
             try runCommand(jobId: jobId, executable: requireExecutable("git"), arguments: ["submodule", "update", "--init", "--recursive"], workingDirectory: source, timeout: 1800)
 
-            try transition(jobId, status: .installingDependencies, stage: "installing dependencies")
-            if FileManager.default.fileExists(atPath: source.appendingPathComponent("Podfile").path) {
-                try runCommand(jobId: jobId, executable: requireExecutable("pod"), arguments: ["install"], workingDirectory: source, timeout: 1800)
+            if let agent = request.agent {
+                try transition(jobId, status: .installingDependencies, stage: "agent dependency handling")
+                try transition(jobId, status: .building, stage: "agent build (\(agent.rawValue))")
+                try runAgentBuild(jobId: jobId, agent: agent, source: source, output: output, request: request)
             } else {
-                store.appendLog(jobId: jobId, "[drift] Podfile not found; letting xcodebuild resolve Swift packages.\n")
-            }
+                try transition(jobId, status: .installingDependencies, stage: "installing dependencies")
+                if FileManager.default.fileExists(atPath: source.appendingPathComponent("Podfile").path) {
+                    try runCommand(jobId: jobId, executable: requireExecutable("pod"), arguments: ["install"], workingDirectory: source, timeout: 1800)
+                } else {
+                    store.appendLog(jobId: jobId, "[drift] Podfile not found; letting xcodebuild resolve Swift packages.\n")
+                }
 
-            try transition(jobId, status: .building, stage: "building")
-            let containerArguments = try resolveXcodeContainer(source: source, request: request)
-            var arguments = ["clean", "build"]
-            arguments.append(contentsOf: containerArguments)
-            arguments.append(contentsOf: [
-                "-scheme", request.scheme,
-                "-configuration", request.configuration,
-                "-sdk", "iphonesimulator",
-                "-destination", "generic/platform=iOS Simulator",
-                "-derivedDataPath", jobDir.appendingPathComponent("DerivedData", isDirectory: true).path,
-                "CODE_SIGNING_ALLOWED=NO"
-            ])
-            if request.includeXcresult {
-                arguments.append(contentsOf: ["-resultBundlePath", output.appendingPathComponent("Build.xcresult", isDirectory: true).path])
+                try transition(jobId, status: .building, stage: "building")
+                try runXcodeBuild(jobId: jobId, source: source, output: output, jobDir: jobDir, request: request)
             }
-            try runCommand(jobId: jobId, executable: requireExecutable("xcodebuild"), arguments: arguments, workingDirectory: source, timeout: TimeInterval(request.timeoutSeconds))
 
             finalStatus = .success
             finalExitCode = 0
@@ -482,9 +529,46 @@ final class BuildWorker {
         store.appendLog(jobId: jobId, "[drift] \(stage)\n")
     }
 
-    private func runCommand(jobId: String, executable: String, arguments: [String], workingDirectory: URL?, timeout: TimeInterval) throws {
+    private func runXcodeBuild(jobId: String, source: URL, output: URL, jobDir: URL, request: BuildRequest) throws {
+        let containerArguments = try resolveXcodeContainer(source: source, request: request)
+        var arguments = ["clean", "build"]
+        arguments.append(contentsOf: containerArguments)
+        arguments.append(contentsOf: [
+            "-scheme", request.scheme,
+            "-configuration", request.configuration,
+            "-sdk", "iphonesimulator",
+            "-destination", "generic/platform=iOS Simulator",
+            "-derivedDataPath", jobDir.appendingPathComponent("DerivedData", isDirectory: true).path,
+            "CODE_SIGNING_ALLOWED=NO"
+        ])
+        if request.includeXcresult {
+            arguments.append(contentsOf: ["-resultBundlePath", output.appendingPathComponent("Build.xcresult", isDirectory: true).path])
+        }
+        try runCommand(
+            jobId: jobId,
+            executable: requireExecutable("xcodebuild"),
+            arguments: arguments,
+            workingDirectory: source,
+            timeout: TimeInterval(request.timeoutSeconds)
+        )
+    }
+
+    private func runAgentBuild(jobId: String, agent: BuildAgent, source: URL, output: URL, request: BuildRequest) throws {
+        let command = AgentBuildCommand.make(agent: agent, source: source, output: output, request: request)
+        store.appendLog(jobId: jobId, "[drift] delegating build to \(agent.rawValue)\n")
+        try runCommand(
+            jobId: jobId,
+            executable: requireExecutable(command.executable),
+            arguments: command.arguments,
+            workingDirectory: source,
+            timeout: TimeInterval(request.timeoutSeconds),
+            loggedArguments: command.loggedArguments
+        )
+    }
+
+    private func runCommand(jobId: String, executable: String, arguments: [String], workingDirectory: URL?, timeout: TimeInterval, loggedArguments: [String]? = nil) throws {
         let commandName = URL(fileURLWithPath: executable).lastPathComponent
-        store.appendLog(jobId: jobId, "$ \(commandName) \(arguments.joined(separator: " "))\n")
+        store.appendLog(jobId: jobId, "$ \(commandName) \((loggedArguments ?? arguments).joined(separator: " "))\n")
         let result = try runner.run(
             executable: executable,
             arguments: arguments,
@@ -937,7 +1021,22 @@ func runServer(
 }
 
 func findExecutable(_ name: String) -> String? {
-    for directory in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+    let pathDirectories = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+        .split(separator: ":")
+        .map(String.init)
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    let fallbackDirectories = [
+        "/Applications/Codex.app/Contents/Resources",
+        "\(home)/.opencode/bin",
+        "\(home)/.local/bin",
+        "\(home)/.npm-global/bin",
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin"
+    ]
+    var seen = Set<String>()
+    for directory in pathDirectories + fallbackDirectories where seen.insert(directory).inserted {
         let path = "\(directory)/\(name)"
         if FileManager.default.isExecutableFile(atPath: path) {
             return path
@@ -950,7 +1049,7 @@ func requireExecutable(_ name: String) throws -> String {
     if let path = findExecutable(name) {
         return path
     }
-    throw BuildRunError.message("\(name) not found in /opt/homebrew/bin, /usr/local/bin, /usr/bin, or /bin")
+    throw BuildRunError.message("\(name) not found in PATH or DriftBuild's fallback executable directories")
 }
 
 func expandPath(_ path: String) -> URL {

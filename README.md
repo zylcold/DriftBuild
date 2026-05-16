@@ -26,8 +26,8 @@ Build worker:
   git checkout <branch>
   git reset --hard <commit>
   git submodule update --init --recursive
-  pod install, when Podfile exists
-  xcodebuild clean build for Debug iOS Simulator
+  default: pod install when Podfile exists, then xcodebuild clean build for Debug iOS Simulator
+  optional: delegate the build to codex, claude, or opencode on the build machine
 ```
 
 The first version intentionally does not archive, export IPA files, manage certificates, or provide a web UI.
@@ -180,17 +180,33 @@ drift submit \
   --wait
 ```
 
+Agent build mode:
+
+```sh
+drift submit \
+  --repo git@gitlab.example.com:ios/YourApp.git \
+  --branch main \
+  --workspace YourApp.xcworkspace \
+  --scheme YourScheme \
+  --agent codex \
+  --wait \
+  --download
+```
+
+Supported agent values are `codex`, `claude`, and `opencode`. The selected agent CLI must be installed on the build machine and available in `PATH`, `/Applications/Codex.app/Contents/Resources`, `~/.opencode/bin`, `~/.local/bin`, `~/.npm-global/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, or `/bin`.
+
 Server build behavior:
 
 - validates the repo URL
 - runs subprocesses without a shell
 - checks out the requested branch and optional commit
 - updates submodules
-- runs `pod install` when `Podfile` exists
-- lets `xcodebuild` resolve Swift Package Manager dependencies
-- runs `xcodebuild clean build`
-- sets `CODE_SIGNING_ALLOWED=NO`
-- targets `iphonesimulator` and `generic/platform=iOS Simulator`
+- default mode runs `pod install` when `Podfile` exists
+- default mode lets `xcodebuild` resolve Swift Package Manager dependencies
+- default mode runs `xcodebuild clean build`
+- default mode sets `CODE_SIGNING_ALLOWED=NO`
+- default mode targets `iphonesimulator` and `generic/platform=iOS Simulator`
+- agent mode invokes the selected agent in the checked-out source directory with DriftBuild's simulator build instructions
 
 ## Logs
 

@@ -6,6 +6,12 @@ import FoundationNetworking
 #endif
 import Darwin
 
+extension BuildAgent: ExpressibleByArgument {
+    public init?(argument: String) {
+        self.init(rawValue: argument.lowercased())
+    }
+}
+
 struct RuntimeError: Error, CustomStringConvertible {
     let description: String
 
@@ -401,6 +407,9 @@ struct Submit: AsyncParsableCommand {
     @Option(help: "Build configuration.")
     var configuration: String = "Debug"
 
+    @Option(help: "Use an agent CLI for the build: codex, claude, or opencode.")
+    var agent: BuildAgent?
+
     @Flag(help: "Include Build.xcresult in result.zip.")
     var includeXcresult = false
 
@@ -430,6 +439,7 @@ struct Submit: AsyncParsableCommand {
             project: project,
             scheme: scheme,
             configuration: configuration,
+            agent: agent,
             includeXcresult: includeXcresult,
             timeoutSeconds: timeout
         )

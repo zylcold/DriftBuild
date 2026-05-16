@@ -38,6 +38,45 @@ final class DriftBuildTests: XCTestCase {
         XCTAssertEqual(decoded.id, "job_1")
         XCTAssertEqual(decoded.status, .queued)
         XCTAssertEqual(decoded.request.scheme, "App")
+        XCTAssertNil(decoded.request.agent)
+    }
+
+    func testBuildRequestSupportsAgentBuild() throws {
+        let request = BuildRequest(
+            repo: "git@example.com:ios/App.git",
+            branch: "main",
+            commit: nil,
+            workspace: "App.xcworkspace",
+            project: nil,
+            scheme: "App",
+            agent: .codex,
+            includeXcresult: true
+        )
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(request)
+        let decoded = try JSONDecoder().decode(BuildRequest.self, from: data)
+        XCTAssertEqual(decoded.agent, .codex)
+        XCTAssertEqual(decoded.workspace, "App.xcworkspace")
+        XCTAssertTrue(decoded.includeXcresult)
+    }
+
+    func testBuildRequestDecodesLegacyPayloadWithoutAgent() throws {
+        let data = Data("""
+        {
+          "repo": "git@example.com:ios/App.git",
+          "branch": "main",
+          "commit": null,
+          "workspace": null,
+          "project": null,
+          "scheme": "App",
+          "configuration": "Debug",
+          "includeXcresult": false,
+          "timeoutSeconds": 3600
+        }
+        """.utf8)
+        let decoded = try JSONDecoder().decode(BuildRequest.self, from: data)
+        XCTAssertNil(decoded.agent)
+        XCTAssertEqual(decoded.scheme, "App")
     }
 
     func testLogOffsetRead() throws {
