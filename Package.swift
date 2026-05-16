@@ -36,8 +36,7 @@ let package = Package(
         ),
         .testTarget(
             name: "DriftBuildTests",
-            dependencies: ["DriftCore"],
-            path: "Tests"
+            dependencies: ["DriftCore"]
         )
     ]
 )

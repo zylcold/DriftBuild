@@ -1,4 +1,5 @@
 import DriftCore
+import Foundation
 import XCTest
 
 final class DriftBuildTests: XCTestCase {

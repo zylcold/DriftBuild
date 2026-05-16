@@ -7,7 +7,7 @@ public enum DriftVersion {
     public static let udpProbe = "DRIFTBUILD_DISCOVER"
 }
 
-public struct ServerInfo: Codable, Hashable {
+public struct ServerInfo: Codable, Hashable, Sendable {
     public var id: String
     public var name: String
     public var host: String
@@ -29,7 +29,7 @@ public struct ServerInfo: Codable, Hashable {
     }
 }
 
-public struct PairingRequest: Codable {
+public struct PairingRequest: Codable, Sendable {
     public var clientName: String
     public var tokenHash: String
 
@@ -39,7 +39,7 @@ public struct PairingRequest: Codable {
     }
 }
 
-public struct PairingCreatedResponse: Codable {
+public struct PairingCreatedResponse: Codable, Sendable {
     public var pairingId: String
     public var pairingCode: String
     public var expiresIn: Int
@@ -51,14 +51,14 @@ public struct PairingCreatedResponse: Codable {
     }
 }
 
-public enum PairingStatus: String, Codable {
+public enum PairingStatus: String, Codable, Sendable {
     case pending
     case approved
     case rejected
     case expired
 }
 
-public struct PairingStatusResponse: Codable {
+public struct PairingStatusResponse: Codable, Sendable {
     public var status: PairingStatus
     public var serverName: String?
     public var serverURL: String?
@@ -70,7 +70,7 @@ public struct PairingStatusResponse: Codable {
     }
 }
 
-public struct BuildRequest: Codable, Hashable {
+public struct BuildRequest: Codable, Hashable, Sendable {
     public var repo: String
     public var branch: String
     public var commit: String?
@@ -104,7 +104,7 @@ public struct BuildRequest: Codable, Hashable {
     }
 }
 
-public enum JobStatus: String, Codable {
+public enum JobStatus: String, Codable, Sendable {
     case queued
     case preparing
     case fetching
@@ -126,7 +126,7 @@ public enum JobStatus: String, Codable {
     }
 }
 
-public struct JobRecord: Codable, Identifiable {
+public struct JobRecord: Codable, Identifiable, Sendable {
     public var id: String
     public var request: BuildRequest
     public var status: JobStatus
@@ -163,7 +163,7 @@ public struct JobRecord: Codable, Identifiable {
     }
 }
 
-public struct BuildCreatedResponse: Codable {
+public struct BuildCreatedResponse: Codable, Sendable {
     public var jobId: String
     public var status: JobStatus
 
@@ -173,7 +173,7 @@ public struct BuildCreatedResponse: Codable {
     }
 }
 
-public struct LogChunkResponse: Codable {
+public struct LogChunkResponse: Codable, Sendable {
     public var offset: UInt64
     public var nextOffset: UInt64
     public var text: String
@@ -187,7 +187,7 @@ public struct LogChunkResponse: Codable {
     }
 }
 
-public struct CancelResponse: Codable {
+public struct CancelResponse: Codable, Sendable {
     public var jobId: String
     public var status: JobStatus
 
@@ -197,7 +197,7 @@ public struct CancelResponse: Codable {
     }
 }
 
-public struct ErrorResponse: Codable {
+public struct ErrorResponse: Codable, Sendable {
     public var error: String
 
     public init(_ error: String) {
