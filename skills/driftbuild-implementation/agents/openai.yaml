@@ -1,0 +1,4 @@
+interface:
+  display_name: "DriftBuild Implementation"
+  short_description: "Implement and debug DriftBuild Swift/Vapor/CLI workflows."
+  default_prompt: "Use this skill when modifying DriftBuild server, CLI, build worker, discovery, pairing, logs, artifact, or queue behavior."

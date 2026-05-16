@@ -1,0 +1,4 @@
+interface:
+  display_name: "DriftBuild Security Review"
+  short_description: "Review DriftBuild auth and command safety."
+  default_prompt: "Use this skill when reviewing or changing DriftBuild auth, tokens, pairing, repo validation, subprocess execution, artifact access, revocation, or logging."

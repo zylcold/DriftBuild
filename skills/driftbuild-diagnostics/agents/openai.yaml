@@ -1,0 +1,4 @@
+interface:
+  display_name: "DriftBuild Diagnostics"
+  short_description: "Diagnose failed remote iOS simulator builds and artifacts."
+  default_prompt: "Use this skill when analyzing DriftBuild job logs, result.zip contents, xcodebuild failures, CocoaPods/SPM issues, or build summary files."

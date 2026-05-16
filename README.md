@@ -46,6 +46,14 @@ Client:
 - macOS with Swift toolchain or Command Line Tools
 - No full Xcode requirement for normal CLI use
 
+## Project Skills
+
+Repository-local Codex skills live under `skills/`:
+
+- `skills/driftbuild-implementation`: implement or debug the Swift/Vapor server, CLI, discovery, pairing, queue, logs, artifacts, and tests.
+- `skills/driftbuild-diagnostics`: diagnose failed remote iOS simulator builds from job status, logs, and `result.zip`.
+- `skills/driftbuild-security-review`: review authentication, tokens, repo validation, subprocess execution, artifacts, and LAN exposure.
+
 ## Build From Source
 
 ```sh
