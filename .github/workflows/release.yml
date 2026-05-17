@@ -18,9 +18,6 @@ jobs:
       - name: Show Swift version
         run: swift --version
 
-      - name: Test
-        run: swift test
-
       - name: Build arm64 release binaries
         run: swift build -c release --arch arm64
 

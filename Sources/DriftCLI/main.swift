@@ -118,6 +118,21 @@ final class DriftHTTPClient {
         return target
     }
 
+    func uploadXcodeBuild(arguments: [String], sourceArchive: URL, timeoutSeconds: Int, token: String) async throws -> BuildCreatedResponse {
+        var request = URLRequest(url: try makeURL("/api/builds/xcodebuild"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/zip", forHTTPHeaderField: "Content-Type")
+        let metadata = XcodeBuildUploadRequest(arguments: arguments, timeoutSeconds: timeoutSeconds)
+        let metadataData = try JSONEncoder().encode(metadata)
+        request.setValue(metadataData.base64EncodedString(), forHTTPHeaderField: "X-Drift-Xcodebuild-Request")
+        let (data, response) = try await URLSession.shared.upload(for: request, fromFile: sourceArchive)
+        try validate(response: response, data: data)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(BuildCreatedResponse.self, from: data)
+    }
+
     private func makeURL(_ path: String) throws -> URL {
         guard let url = URL(string: path.trimmedPathPrefix(), relativeTo: baseURL)?.absoluteURL else {
             throw RuntimeError("Invalid request path: \(path)")
@@ -267,6 +282,7 @@ struct Drift: AsyncParsableCommand {
         subcommands: [
             Discover.self,
             Pair.self,
+            Build.self,
             Submit.self,
             Status.self,
             Logs.self,
@@ -276,6 +292,45 @@ struct Drift: AsyncParsableCommand {
             Version.self
         ]
     )
+}
+
+struct Build: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "Run xcodebuild on the paired drift-server using the current directory.")
+
+    @Argument(parsing: .allUnrecognized, help: "Arguments passed through to remote xcodebuild.")
+    var xcodebuildArguments: [String] = []
+
+    func run() async throws {
+        let paired = try ConfigStore.load().resolve(nil)
+        let client = try DriftHTTPClient(serverURL: paired.url)
+        let arguments = strippedTerminator(xcodebuildArguments)
+        let timeout = Int(ProcessInfo.processInfo.environment["DRIFT_BUILD_TIMEOUT"] ?? "") ?? 3600
+        let archive = try SourceArchive.makeCurrentDirectoryArchive()
+        defer { try? FileManager.default.removeItem(at: archive.temporaryDirectory) }
+
+        let size = try FileManager.default.attributesOfItem(atPath: archive.file.path)[.size] as? NSNumber
+        print("[drift] packed current directory (\(ByteCountFormatter.string(fromByteCount: size?.int64Value ?? 0, countStyle: .file)))")
+        print("[drift] uploading source to \(paired.name)...")
+        let response = try await client.uploadXcodeBuild(
+            arguments: arguments,
+            sourceArchive: archive.file,
+            timeoutSeconds: timeout,
+            token: paired.token
+        )
+        print("[drift] job \(response.jobId) queued; waiting for remote xcodebuild")
+        try await FollowHelper.follow(
+            client: client,
+            jobId: response.jobId,
+            token: paired.token,
+            download: false,
+            output: URL(fileURLWithPath: "./remote-build-output", isDirectory: true)
+        )
+    }
+
+    private func strippedTerminator(_ arguments: [String]) -> [String] {
+        guard arguments.first == "--" else { return arguments }
+        return Array(arguments.dropFirst())
+    }
 }
 
 struct Discover: AsyncParsableCommand {
@@ -632,6 +687,85 @@ enum FollowHelper {
             try await Task.sleep(nanoseconds: 2_000_000_000)
         }
     }
+}
+
+struct SourceArchive {
+    var file: URL
+    var temporaryDirectory: URL
+
+    static func makeCurrentDirectoryArchive() throws -> SourceArchive {
+        let fileManager = FileManager.default
+        let temporaryDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("driftbuild-source-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        let archive = temporaryDirectory.appendingPathComponent("source.zip")
+        do {
+            if let zip = findLocalExecutable("zip") {
+                try LocalProcess.run(
+                    executable: zip,
+                    arguments: [
+                        "-qry", archive.path, ".",
+                        "-x", ".git/*",
+                        "-x", ".build/*",
+                        "-x", ".swiftpm/*",
+                        "-x", "DerivedData/*",
+                        "-x", "build/*",
+                        "-x", "*.xcresult/*"
+                    ],
+                    workingDirectory: URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
+                )
+            } else {
+                try LocalProcess.run(
+                    executable: try requireLocalExecutable("ditto"),
+                    arguments: ["-c", "-k", "--sequesterRsrc", ".", archive.path],
+                    workingDirectory: URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
+                )
+            }
+        } catch {
+            try? fileManager.removeItem(at: temporaryDirectory)
+            throw error
+        }
+        return SourceArchive(file: archive, temporaryDirectory: temporaryDirectory)
+    }
+}
+
+enum LocalProcess {
+    static func run(executable: String, arguments: [String], workingDirectory: URL?) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.currentDirectoryURL = workingDirectory
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        process.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        if process.terminationStatus != 0 {
+            let output = String(decoding: data, as: UTF8.self)
+            throw RuntimeError("\(URL(fileURLWithPath: executable).lastPathComponent) exited with code \(process.terminationStatus): \(output)")
+        }
+    }
+}
+
+func requireLocalExecutable(_ name: String) throws -> String {
+    if let path = findLocalExecutable(name) {
+        return path
+    }
+    throw RuntimeError("\(name) not found in PATH")
+}
+
+func findLocalExecutable(_ name: String) -> String? {
+    let pathDirectories = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+        .split(separator: ":")
+        .map(String.init)
+    for directory in pathDirectories + ["/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin"] {
+        let path = "\(directory)/\(name)"
+        if FileManager.default.isExecutableFile(atPath: path) {
+            return path
+        }
+    }
+    return nil
 }
 
 func normalizeURL(_ value: String) -> String {

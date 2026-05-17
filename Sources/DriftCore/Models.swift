@@ -81,6 +81,8 @@ public struct BuildRequest: Codable, Hashable, Sendable {
     public var agent: BuildAgent?
     public var includeXcresult: Bool
     public var timeoutSeconds: Int
+    public var uploadedSource: Bool?
+    public var xcodebuildArguments: [String]?
 
     public init(
         repo: String,
@@ -92,7 +94,9 @@ public struct BuildRequest: Codable, Hashable, Sendable {
         configuration: String = "Debug",
         agent: BuildAgent? = nil,
         includeXcresult: Bool = false,
-        timeoutSeconds: Int = 3600
+        timeoutSeconds: Int = 3600,
+        uploadedSource: Bool? = nil,
+        xcodebuildArguments: [String]? = nil
     ) {
         self.repo = repo
         self.branch = branch
@@ -103,6 +107,18 @@ public struct BuildRequest: Codable, Hashable, Sendable {
         self.configuration = configuration
         self.agent = agent
         self.includeXcresult = includeXcresult
+        self.timeoutSeconds = timeoutSeconds
+        self.uploadedSource = uploadedSource
+        self.xcodebuildArguments = xcodebuildArguments
+    }
+}
+
+public struct XcodeBuildUploadRequest: Codable, Hashable, Sendable {
+    public var arguments: [String]
+    public var timeoutSeconds: Int
+
+    public init(arguments: [String], timeoutSeconds: Int = 3600) {
+        self.arguments = arguments
         self.timeoutSeconds = timeoutSeconds
     }
 }

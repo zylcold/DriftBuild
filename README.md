@@ -155,6 +155,16 @@ drift servers --set-default mac-mini-01
 drift servers --remove mac-mini-01
 ```
 
+## Remote xcodebuild
+
+`drift build` runs `xcodebuild` on the paired build Mac from your current directory. Arguments after `build` are passed through to remote `xcodebuild` unchanged:
+
+```sh
+drift build -workspace YourApp.xcworkspace -scheme YourScheme -configuration Debug -sdk iphonesimulator build
+```
+
+The CLI packages the current directory, uploads it to the default paired server, streams the remote `xcodebuild` log, and waits for completion. Set `DRIFT_BUILD_TIMEOUT` to override the default 3600 second timeout.
+
 ## Submit Build
 
 ```sh
@@ -251,6 +261,7 @@ Anonymous:
 Authenticated with `Authorization: Bearer <token>`:
 
 - `POST /api/builds`
+- `POST /api/builds/xcodebuild`
 - `GET /api/builds/:id`
 - `GET /api/builds/:id/logs?offset=0`
 - `GET /api/builds/:id/artifact`

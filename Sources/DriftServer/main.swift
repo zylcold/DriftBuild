@@ -9,6 +9,7 @@ extension PairingRequest: Content {}
 extension PairingCreatedResponse: Content {}
 extension PairingStatusResponse: Content {}
 extension BuildRequest: Content {}
+extension XcodeBuildUploadRequest: Content {}
 extension BuildCreatedResponse: Content {}
 extension JobRecord: Content {}
 extension LogChunkResponse: Content {}
@@ -66,6 +67,10 @@ final class ServerStateStore {
 
     func artifactURL(_ jobId: String) -> URL {
         jobDirectory(jobId).appendingPathComponent("result.zip")
+    }
+
+    func sourceArchiveURL(_ jobId: String) -> URL {
+        jobDirectory(jobId).appendingPathComponent("source.zip")
     }
 
     func createPairing(_ request: PairingRequest, autoApprove: Bool) throws -> PairingCreatedResponse {
@@ -445,28 +450,35 @@ final class BuildWorker {
             let source = jobDir.appendingPathComponent("source", isDirectory: true)
             let output = store.outputDirectory(jobId)
 
-            try transition(jobId, status: .fetching, stage: "fetching")
-            try runCommand(jobId: jobId, executable: requireExecutable("git"), arguments: ["clone", "--recursive", request.repo, source.path], workingDirectory: nil, timeout: 1800)
-            try runCommand(jobId: jobId, executable: requireExecutable("git"), arguments: ["checkout", request.branch], workingDirectory: source, timeout: 300)
-            if let commit = request.commit, !commit.isEmpty {
-                try runCommand(jobId: jobId, executable: requireExecutable("git"), arguments: ["reset", "--hard", commit], workingDirectory: source, timeout: 300)
-            }
-            try runCommand(jobId: jobId, executable: requireExecutable("git"), arguments: ["submodule", "update", "--init", "--recursive"], workingDirectory: source, timeout: 1800)
-
-            if let agent = request.agent {
-                try transition(jobId, status: .installingDependencies, stage: "agent dependency handling")
-                try transition(jobId, status: .building, stage: "agent build (\(agent.rawValue))")
-                try runAgentBuild(jobId: jobId, agent: agent, source: source, output: output, request: request)
+            if request.uploadedSource == true {
+                try transition(jobId, status: .fetching, stage: "unpacking uploaded source")
+                try unpackUploadedSource(jobId: jobId, source: source)
+                try transition(jobId, status: .building, stage: "remote xcodebuild")
+                try runRawXcodeBuild(jobId: jobId, source: source, request: request)
             } else {
-                try transition(jobId, status: .installingDependencies, stage: "installing dependencies")
-                if FileManager.default.fileExists(atPath: source.appendingPathComponent("Podfile").path) {
-                    try runCommand(jobId: jobId, executable: requireExecutable("pod"), arguments: ["install"], workingDirectory: source, timeout: 1800)
-                } else {
-                    store.appendLog(jobId: jobId, "[drift] Podfile not found; letting xcodebuild resolve Swift packages.\n")
+                try transition(jobId, status: .fetching, stage: "fetching")
+                try runCommand(jobId: jobId, executable: requireExecutable("git"), arguments: ["clone", "--recursive", request.repo, source.path], workingDirectory: nil, timeout: 1800)
+                try runCommand(jobId: jobId, executable: requireExecutable("git"), arguments: ["checkout", request.branch], workingDirectory: source, timeout: 300)
+                if let commit = request.commit, !commit.isEmpty {
+                    try runCommand(jobId: jobId, executable: requireExecutable("git"), arguments: ["reset", "--hard", commit], workingDirectory: source, timeout: 300)
                 }
+                try runCommand(jobId: jobId, executable: requireExecutable("git"), arguments: ["submodule", "update", "--init", "--recursive"], workingDirectory: source, timeout: 1800)
 
-                try transition(jobId, status: .building, stage: "building")
-                try runXcodeBuild(jobId: jobId, source: source, output: output, jobDir: jobDir, request: request)
+                if let agent = request.agent {
+                    try transition(jobId, status: .installingDependencies, stage: "agent dependency handling")
+                    try transition(jobId, status: .building, stage: "agent build (\(agent.rawValue))")
+                    try runAgentBuild(jobId: jobId, agent: agent, source: source, output: output, request: request)
+                } else {
+                    try transition(jobId, status: .installingDependencies, stage: "installing dependencies")
+                    if FileManager.default.fileExists(atPath: source.appendingPathComponent("Podfile").path) {
+                        try runCommand(jobId: jobId, executable: requireExecutable("pod"), arguments: ["install"], workingDirectory: source, timeout: 1800)
+                    } else {
+                        store.appendLog(jobId: jobId, "[drift] Podfile not found; letting xcodebuild resolve Swift packages.\n")
+                    }
+
+                    try transition(jobId, status: .building, stage: "building")
+                    try runXcodeBuild(jobId: jobId, source: source, output: output, jobDir: jobDir, request: request)
+                }
             }
 
             finalStatus = .success
@@ -544,6 +556,33 @@ final class BuildWorker {
         if request.includeXcresult {
             arguments.append(contentsOf: ["-resultBundlePath", output.appendingPathComponent("Build.xcresult", isDirectory: true).path])
         }
+        try runCommand(
+            jobId: jobId,
+            executable: requireExecutable("xcodebuild"),
+            arguments: arguments,
+            workingDirectory: source,
+            timeout: TimeInterval(request.timeoutSeconds)
+        )
+    }
+
+    private func unpackUploadedSource(jobId: String, source: URL) throws {
+        let archive = store.sourceArchiveURL(jobId)
+        guard FileManager.default.fileExists(atPath: archive.path) else {
+            throw BuildRunError.message("Uploaded source archive not found")
+        }
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try runCommand(
+            jobId: jobId,
+            executable: requireExecutable("ditto"),
+            arguments: ["-x", "-k", archive.path, source.path],
+            workingDirectory: nil,
+            timeout: 1800
+        )
+    }
+
+    private func runRawXcodeBuild(jobId: String, source: URL, request: BuildRequest) throws {
+        let arguments = request.xcodebuildArguments ?? []
+        store.appendLog(jobId: jobId, "[drift] running xcodebuild with caller arguments\n")
         try runCommand(
             jobId: jobId,
             executable: requireExecutable("xcodebuild"),
@@ -771,10 +810,11 @@ final class BuildQueue {
             var selected: String?
             lock.lock()
             if running.count < maxConcurrent {
-                let runningRepos = Set(running.values.map(\.repo))
+                let runningRepos = Set(running.values.compactMap(concurrencyKey))
                 if let index = pending.firstIndex(where: { id in
                     guard let job = try? store.job(id: id) else { return false }
-                    return !runningRepos.contains(job.request.repo)
+                    guard let key = concurrencyKey(job.request) else { return true }
+                    return !runningRepos.contains(key)
                 }) {
                     selected = pending.remove(at: index)
                     if let selected, let job = try? store.job(id: selected) {
@@ -790,6 +830,10 @@ final class BuildQueue {
                 self?.finish(jobId: jobId)
             }
         }
+    }
+
+    private func concurrencyKey(_ request: BuildRequest) -> String? {
+        request.uploadedSource == true ? nil : request.repo
     }
 
     private func finish(jobId: String) {
@@ -840,6 +884,32 @@ func configureRoutes(app: Application, store: ServerStateStore, queue: BuildQueu
             throw Abort(.badRequest, reason: "scheme is required")
         }
         let job = try store.createJob(body)
+        queue.enqueue(job)
+        return BuildCreatedResponse(jobId: job.id, status: job.status)
+    }
+    protected.on(.POST, "builds", "xcodebuild", body: .collect(maxSize: 2_000_000_000)) { request async throws -> BuildCreatedResponse in
+        guard let encoded = request.headers.first(name: "X-Drift-Xcodebuild-Request"),
+              let metadataData = Data(base64Encoded: encoded) else {
+            throw Abort(.badRequest, reason: "Missing xcodebuild request metadata")
+        }
+        let metadata = try JSONDecoder().decode(XcodeBuildUploadRequest.self, from: metadataData)
+        guard let body = request.body.data else {
+            throw Abort(.badRequest, reason: "Missing source archive")
+        }
+        let buildRequest = BuildRequest(
+            repo: "uploaded://xcodebuild",
+            branch: "",
+            commit: nil,
+            workspace: nil,
+            project: nil,
+            scheme: "",
+            timeoutSeconds: metadata.timeoutSeconds,
+            uploadedSource: true,
+            xcodebuildArguments: metadata.arguments
+        )
+        let job = try store.createJob(buildRequest)
+        try Data(body.readableBytesView).write(to: store.sourceArchiveURL(job.id), options: [.atomic])
+        store.appendLog(jobId: job.id, "[drift] uploaded source archive received\n")
         queue.enqueue(job)
         return BuildCreatedResponse(jobId: job.id, status: job.status)
     }
