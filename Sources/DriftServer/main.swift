@@ -551,7 +551,9 @@ final class BuildWorker {
             "-sdk", "iphonesimulator",
             "-destination", "generic/platform=iOS Simulator",
             "-derivedDataPath", jobDir.appendingPathComponent("DerivedData", isDirectory: true).path,
-            "CODE_SIGNING_ALLOWED=NO"
+            "CODE_SIGNING_ALLOWED=NO",
+            "CODE_SIGN_IDENTITY=\"\"",
+            "CODE_SIGNING_REQUIRED=NO"
         ])
         if request.includeXcresult {
             arguments.append(contentsOf: ["-resultBundlePath", output.appendingPathComponent("Build.xcresult", isDirectory: true).path])
